@@ -1,65 +1,297 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import { parseExcelFile, Student } from './utils/excel-utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Upload, FileSpreadsheet, CheckCircle, AlertTriangle, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
+
+interface MatchRecord {
+  id: string;
+  fullName: string;
+  locationsA: string[];
+  locationsB: string[];
+}
 
 export default function Home() {
+  const [fileA, setFileA] = useState<File | null>(null);
+  const [fileB, setFileB] = useState<File | null>(null);
+  const [studentsA, setStudentsA] = useState<Student[]>([]);
+  const [studentsB, setStudentsB] = useState<Student[]>([]);
+  const [illegalMatches, setIllegalMatches] = useState<MatchRecord[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [hasChecked, setHasChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, setFile: (f: File | null) => void) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0]);
+      // Reset results when files change
+      setHasChecked(false);
+      setIllegalMatches([]);
+      setError(null);
+    }
+  };
+
+  const processFiles = async () => {
+    if (!fileA || !fileB) {
+      setError('Please upload both files.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      const [dataA, dataB] = await Promise.all([
+        parseExcelFile(fileA),
+        parseExcelFile(fileB)
+      ]);
+
+      setStudentsA(dataA);
+      setStudentsB(dataB);
+
+      // Group B students by ID for easy lookup
+      const mapB = new Map<string, Student[]>();
+      dataB.forEach(s => {
+        const key = s.id.toUpperCase();
+        if (!mapB.has(key)) {
+          mapB.set(key, []);
+        }
+        mapB.get(key)?.push(s);
+      });
+
+      // Group A students by ID to handle duplicates in A
+      const mapA = new Map<string, Student[]>();
+      dataA.forEach(s => {
+        const key = s.id.toUpperCase();
+        if (!mapA.has(key)) {
+          mapA.set(key, []);
+        }
+        mapA.get(key)?.push(s);
+      });
+
+      const matches: MatchRecord[] = [];
+
+      // Iterate through unique IDs in A
+      mapA.forEach((studentsInA, id) => {
+        if (mapB.has(id)) {
+          const studentsInB = mapB.get(id)!;
+
+          // Create a match record
+          matches.push({
+            id: studentsInA[0].id, // Use the ID from the first occurrence
+            fullName: studentsInA[0].fullName,
+            locationsA: studentsInA.map(s => `[${s.sourceSheet}] Row ${s.rowNumber}`),
+            locationsB: studentsInB.map(s => `[${s.sourceSheet}] Row ${s.rowNumber}`),
+          });
+        }
+      });
+
+      setIllegalMatches(matches);
+      setHasChecked(true);
+    } catch (err) {
+      console.error(err);
+      setError('Error processing files. Please check the file format.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const exportResults = () => {
+    if (illegalMatches.length === 0) return;
+
+    const exportData = illegalMatches.map(m => ({
+      'ID No': m.id,
+      'Full Name': m.fullName,
+      'Found in Group A (Cafe)': m.locationsA.join('; '),
+      'Found in Group B (Bank)': m.locationsB.join('; ')
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Illegal Students");
+    XLSX.writeFile(workbook, "compliance_results_detailed.xlsx");
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-gray-50 p-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-8">
+        <div className="text-center space-y-2">
+          <h1 className="text-4xl font-bold tracking-tight text-gray-900">Compliance Checker</h1>
+          <p className="text-gray-500 text-lg">Identify students registered in Cafe (Group A) who are also receiving Cash Allowance (Group B)</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          {/* Group A Input */}
+          <Card className="border-t-4 border-t-blue-500 shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-blue-700">
+                <FileSpreadsheet className="h-5 w-5" />
+                Group A (Cafe Users)
+              </CardTitle>
+              <CardDescription>Upload the list of students registered for cafe meals</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid w-full max-w-sm items-center gap-1.5">
+                <Input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={(e) => handleFileChange(e, setFileA)}
+                  className="cursor-pointer"
+                />
+                {fileA && <p className="text-sm text-green-600 flex items-center gap-1 mt-1"><CheckCircle className="h-3 w-3" /> {fileA.name}</p>}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Group B Input */}
+          <Card className="border-t-4 border-t-green-500 shadow-sm hover:shadow-md transition-shadow">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-green-700">
+                <FileSpreadsheet className="h-5 w-5" />
+                Group B (Bank/Cash)
+              </CardTitle>
+              <CardDescription>Upload the list of students receiving cash allowance</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid w-full max-w-sm items-center gap-1.5">
+                <Input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={(e) => handleFileChange(e, setFileB)}
+                  className="cursor-pointer"
+                />
+                {fileB && <p className="text-sm text-green-600 flex items-center gap-1 mt-1"><CheckCircle className="h-3 w-3" /> {fileB.name}</p>}
+              </div>
+            </CardContent>
+          </Card>
         </div>
-      </main>
+
+        <div className="flex justify-center">
+          <Button
+            size="lg"
+            onClick={processFiles}
+            disabled={!fileA || !fileB || isProcessing}
+            className="w-full md:w-auto px-8 py-6 text-lg shadow-lg hover:shadow-xl transition-all"
+          >
+            {isProcessing ? 'Processing...' : 'Check Compliance'}
+          </Button>
+        </div>
+
+        {error && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {hasChecked && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-gray-500">Total Cafe Users</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{studentsA.length}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-gray-500">Total Bank Users</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{studentsB.length}</div>
+                </CardContent>
+              </Card>
+              <Card className={illegalMatches.length > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-gray-500">Illegal Students</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold ${illegalMatches.length > 0 ? "text-red-600" : "text-green-600"}`}>
+                    {illegalMatches.length}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Results</CardTitle>
+                  <CardDescription>
+                    {illegalMatches.length > 0
+                      ? `Found ${illegalMatches.length} students violating compliance.`
+                      : "No compliance violations found."}
+                  </CardDescription>
+                </div>
+                {illegalMatches.length > 0 && (
+                  <Button variant="outline" onClick={exportResults} className="gap-2">
+                    <Download className="h-4 w-4" />
+                    Export Excel
+                  </Button>
+                )}
+              </CardHeader>
+              <CardContent>
+                {illegalMatches.length > 0 ? (
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>ID No</TableHead>
+                          <TableHead>Full Name</TableHead>
+                          <TableHead>Found in Group A (Cafe)</TableHead>
+                          <TableHead>Found in Group B (Bank)</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {illegalMatches.map((match, index) => (
+                          <TableRow key={`${match.id}-${index}`}>
+                            <TableCell className="font-medium">{match.id}</TableCell>
+                            <TableCell>{match.fullName}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1">
+                                {match.locationsA.map((loc, i) => (
+                                  <span key={i} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">{loc}</span>
+                                ))}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1">
+                                {match.locationsB.map((loc, i) => (
+                                  <span key={i} className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">{loc}</span>
+                                ))}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="destructive">Illegal</Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-gray-500">
+                    <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
+                    <p className="text-lg font-medium">All Clear!</p>
+                    <p>No students found in both lists.</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
