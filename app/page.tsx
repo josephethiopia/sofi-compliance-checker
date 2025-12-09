@@ -8,14 +8,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Upload, FileSpreadsheet, CheckCircle, AlertTriangle, Download } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle, AlertTriangle, Download, AlertOctagon } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 interface MatchRecord {
   id: string;
-  fullName: string;
+  fullNameA: string;
+  fullNameB: string;
   locationsA: string[];
   locationsB: string[];
+  status: 'ILLEGAL' | 'CONFLICT';
 }
 
 export default function Home() {
@@ -23,7 +25,7 @@ export default function Home() {
   const [fileB, setFileB] = useState<File | null>(null);
   const [studentsA, setStudentsA] = useState<Student[]>([]);
   const [studentsB, setStudentsB] = useState<Student[]>([]);
-  const [illegalMatches, setIllegalMatches] = useState<MatchRecord[]>([]);
+  const [matches, setMatches] = useState<MatchRecord[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [hasChecked, setHasChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +35,7 @@ export default function Home() {
       setFile(e.target.files[0]);
       // Reset results when files change
       setHasChecked(false);
-      setIllegalMatches([]);
+      setMatches([]);
       setError(null);
     }
   };
@@ -76,24 +78,37 @@ export default function Home() {
         mapA.get(key)?.push(s);
       });
 
-      const matches: MatchRecord[] = [];
+      const newMatches: MatchRecord[] = [];
 
       // Iterate through unique IDs in A
       mapA.forEach((studentsInA, id) => {
         if (mapB.has(id)) {
           const studentsInB = mapB.get(id)!;
 
+          // Helper to get first two names normalized
+          const getFirstTwoNames = (fullName: string) => {
+            return fullName.trim().split(/\s+/).slice(0, 2).join(' ').toLowerCase();
+          };
+
+          const nameA = studentsInA[0].fullName;
+          const nameB = studentsInB[0].fullName;
+
+          // Compare only the first two names
+          const isNameMatch = getFirstTwoNames(nameA) === getFirstTwoNames(nameB);
+
           // Create a match record
-          matches.push({
+          newMatches.push({
             id: studentsInA[0].id, // Use the ID from the first occurrence
-            fullName: studentsInA[0].fullName,
+            fullNameA: nameA,
+            fullNameB: nameB,
             locationsA: studentsInA.map(s => `[${s.sourceSheet}] Row ${s.rowNumber}`),
             locationsB: studentsInB.map(s => `[${s.sourceSheet}] Row ${s.rowNumber}`),
+            status: isNameMatch ? 'ILLEGAL' : 'CONFLICT'
           });
         }
       });
 
-      setIllegalMatches(matches);
+      setMatches(newMatches);
       setHasChecked(true);
     } catch (err) {
       console.error(err);
@@ -104,20 +119,25 @@ export default function Home() {
   };
 
   const exportResults = () => {
-    if (illegalMatches.length === 0) return;
+    if (matches.length === 0) return;
 
-    const exportData = illegalMatches.map(m => ({
+    const exportData = matches.map(m => ({
       'ID No': m.id,
-      'Full Name': m.fullName,
+      'Status': m.status,
+      'Name (Cafe)': m.fullNameA,
+      'Name (Bank)': m.fullNameB,
       'Found in Group A (Cafe)': m.locationsA.join('; '),
       'Found in Group B (Bank)': m.locationsB.join('; ')
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Illegal Students");
-    XLSX.writeFile(workbook, "compliance_results_detailed.xlsx");
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Compliance Report");
+    XLSX.writeFile(workbook, "compliance_report.xlsx");
   };
+
+  const illegalCount = matches.filter(m => m.status === 'ILLEGAL').length;
+  const conflictCount = matches.filter(m => m.status === 'CONFLICT').length;
 
   return (
     <div className="min-h-screen bg-gray-50 p-8 font-sans">
@@ -194,7 +214,7 @@ export default function Home() {
 
         {hasChecked && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-gray-500">Total Cafe Users</CardTitle>
@@ -211,13 +231,23 @@ export default function Home() {
                   <div className="text-2xl font-bold">{studentsB.length}</div>
                 </CardContent>
               </Card>
-              <Card className={illegalMatches.length > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}>
+              <Card className={illegalCount > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-gray-500">Illegal Students</CardTitle>
+                  <CardTitle className="text-sm font-medium text-gray-500">Confirmed Illegal</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold ${illegalMatches.length > 0 ? "text-red-600" : "text-green-600"}`}>
-                    {illegalMatches.length}
+                  <div className={`text-2xl font-bold ${illegalCount > 0 ? "text-red-600" : "text-green-600"}`}>
+                    {illegalCount}
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className={conflictCount > 0 ? "bg-orange-50 border-orange-200" : "bg-gray-50 border-gray-200"}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-gray-500">ID Conflicts</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold ${conflictCount > 0 ? "text-orange-600" : "text-gray-600"}`}>
+                    {conflictCount}
                   </div>
                 </CardContent>
               </Card>
@@ -228,36 +258,40 @@ export default function Home() {
                 <div>
                   <CardTitle>Results</CardTitle>
                   <CardDescription>
-                    {illegalMatches.length > 0
-                      ? `Found ${illegalMatches.length} students violating compliance.`
-                      : "No compliance violations found."}
+                    {matches.length > 0
+                      ? `Found ${matches.length} matches (${illegalCount} illegal, ${conflictCount} conflicts).`
+                      : "No matches found."}
                   </CardDescription>
                 </div>
-                {illegalMatches.length > 0 && (
+                {matches.length > 0 && (
                   <Button variant="outline" onClick={exportResults} className="gap-2">
                     <Download className="h-4 w-4" />
-                    Export Excel
+                    Export Report
                   </Button>
                 )}
               </CardHeader>
               <CardContent>
-                {illegalMatches.length > 0 ? (
+                {matches.length > 0 ? (
                   <div className="rounded-md border">
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead>ID No</TableHead>
-                          <TableHead>Full Name</TableHead>
-                          <TableHead>Found in Group A (Cafe)</TableHead>
-                          <TableHead>Found in Group B (Bank)</TableHead>
+                          <TableHead>Name (Cafe)</TableHead>
+                          <TableHead>Name (Bank)</TableHead>
+                          <TableHead>Found in Group A</TableHead>
+                          <TableHead>Found in Group B</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {illegalMatches.map((match, index) => (
+                        {matches.map((match, index) => (
                           <TableRow key={`${match.id}-${index}`}>
                             <TableCell className="font-medium">{match.id}</TableCell>
-                            <TableCell>{match.fullName}</TableCell>
+                            <TableCell>{match.fullNameA}</TableCell>
+                            <TableCell className={match.status === 'CONFLICT' ? 'text-orange-600 font-medium' : ''}>
+                              {match.fullNameB}
+                            </TableCell>
                             <TableCell>
                               <div className="flex flex-col gap-1">
                                 {match.locationsA.map((loc, i) => (
@@ -273,7 +307,13 @@ export default function Home() {
                               </div>
                             </TableCell>
                             <TableCell>
-                              <Badge variant="destructive">Illegal</Badge>
+                              {match.status === 'ILLEGAL' ? (
+                                <Badge variant="destructive">Illegal</Badge>
+                              ) : (
+                                <Badge variant="secondary" className="bg-orange-100 text-orange-800 hover:bg-orange-200">
+                                  ID Conflict
+                                </Badge>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -284,7 +324,7 @@ export default function Home() {
                   <div className="text-center py-12 text-gray-500">
                     <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
                     <p className="text-lg font-medium">All Clear!</p>
-                    <p>No students found in both lists.</p>
+                    <p>No matches found in both lists.</p>
                   </div>
                 )}
               </CardContent>
